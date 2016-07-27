@@ -3,16 +3,10 @@ import time
 import numpy as np
 import pandas as pd
 import re
-from decimal import Decimal
 import locale
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.feature_extraction import FeatureHasher, DictVectorizer
 import scipy
-
-from sklearn import cross_validation
-from sklearn import neighbors
-from sklearn import grid_search
-
 
 locale.setlocale( locale.LC_ALL, 'en_CA.UTF-8' )
 
@@ -28,6 +22,15 @@ def stopwatch(message):
   print('Total elapsed time for %s: %.3f s' % (message, t1 - t0))
 
 
+def time_fun(func):
+  def wrapper(*arg, **kw):
+    t1 = time.time()
+    res = func(*arg, **kw)
+    t2 = time.time()
+    return (t2 - t1), res, func.__name__
+  return wrapper
+
+
 
 def chunks(l, n):
   """ Yield successive n-sized chunks from l.
@@ -38,6 +41,10 @@ def chunks(l, n):
   """
   for i in range(0, len(l), n):
     yield l[i:i + n]
+
+def full_head(df):
+  for l in list(chunks(df.columns.values,8)):
+    print df[l].head()
 
 def convert(func):
   """ Wraps convert functions to return NaN on errors.
@@ -73,7 +80,7 @@ def dollar_convert(s):
   :return dollar amount as float
   """
   try:
-    v = Decimal(dollar_convert.re_dollar_stripper.sub('',s))
+    v = np.float64(dollar_convert.re_dollar_stripper.sub('',s))
     s1 = locale.currency(v, grouping=True)
     if s1 != s and s1[:-3] != s:
       raise ValueError("%s not equal to %s" % (s1, s))
@@ -108,10 +115,35 @@ def pos_int_convert(n):
   :param n: the number to be converted
   :return the integer n if strictly positive, otherwise NaN
   """
-  if n > 0:
-    return np.int16(n)
-  else:
-    return np.int16(-1)
+  try:
+    n1 = np.int16(n)
+    if n1 > -1:
+      return n1
+    else:
+      return np.nan
+  except:
+    return np.nan
+
+def delinquent_convert(n):
+  """ Replaces NaNs with a big value.
+
+  It's assumed that a NaN indicates that the event has never happened.
+  In this case, we replace a NaN by a large number of months, i.e. 1200
+
+  :param n: the number of months to be converted
+  :return the integer n if strictly positive, otherwise NaN
+  """
+  try:
+    if n == '':
+      return 1200
+    else:
+      n1 = int(n)
+      if n1 > -1:
+        return n1
+      else:
+        return np.nan
+  except:
+    return np.nan
 
 
 # @convert
@@ -172,36 +204,6 @@ class CleanerTransformer(BaseEstimator, TransformerMixin):
     return df.dropna(axis=0)
 
 
-class VectorizerTransformer(BaseEstimator, TransformerMixin):
-
-  def __init__(self):
-    """ Initializes dict of columns to be vectorized and their vectorizers. """
-    self.categorical = ["X7", "X8", "X9", "X11", "X12", "X14", "X17", "X19",
-                        "X20"]
-    self.colVecDict = {}
-    for x in self.categorical:
-      self.colVecDict.update({x:FeatureHasher(n_features=1024,
-                                              input_type='dict')})
-    pass
-
-  def fit(self, X, y=None):
-    return self
-
-  def transform(self, df):
-    """ Transforms dirty input DataFrame into a cleaned DataFrame
-
-    :param df: pandas DataFrame
-    :return scipy sparse matrix containing hashed features
-    """
-    for i, (col, vec) in enumerate(self.colVecDict.iteritems()):
-      t = vec.transform(df.loc[:,col].fillna("NA")\
-                        .apply(lambda x: {x: 1}).values)
-      if i == 0:
-        sparseMatrix = t
-      else:
-        sparseMatrix = scipy.sparse.hstack((sparseMatrix,t))
-
-    return sparseMatrix
 
 class ColumnHasherTransformer(BaseEstimator, TransformerMixin):
   def __init__(self, col):
@@ -212,7 +214,7 @@ class ColumnHasherTransformer(BaseEstimator, TransformerMixin):
     return self
 
   def transform(self, df):
-    return self.fh.transform(df.loc[:,self.col].fillna("NA")\
+    return self.fh.transform(df.loc[:,self.col]\
                              .apply(lambda x: {x: 1}).values)
 
 class ColumnSelectorTransformer(BaseEstimator, TransformerMixin):
@@ -223,4 +225,5 @@ class ColumnSelectorTransformer(BaseEstimator, TransformerMixin):
     return self
 
   def transform(self, df):
-    return df.loc[:,self.cols]
+    # return scipy.sparse.csr_matrix(df.loc[:,self.cols].as_matrix())
+    return df.loc[:,self.cols].as_matrix()
