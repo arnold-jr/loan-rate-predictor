@@ -21,16 +21,14 @@ def stopwatch(message):
     t1 = time.time()
   print('Total elapsed time for %s: %.3f s' % (message, t1 - t0))
 
-
-def time_fun(func):
-  def wrapper(*arg, **kw):
-    t1 = time.time()
-    res = func(*arg, **kw)
-    t2 = time.time()
-    return (t2 - t1), res, func.__name__
-  return wrapper
-
-
+def date_parser(x):
+  try:
+    return pd.to_datetime(x, format='%b-%y', errors='raise')
+  except:
+    try:
+      return pd.to_datetime(x, format='%y-%b', errors='raise')
+    except:
+      return pd.to_datetime(x, errors='coerce')
 
 def chunks(l, n):
   """ Yield successive n-sized chunks from l.
