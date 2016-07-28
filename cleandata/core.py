@@ -2,11 +2,13 @@ import pandas as pd
 import numpy as np
 import helpers as h
 from sklearn.pipeline import Pipeline, FeatureUnion
+from sklearn.preprocessing import MaxAbsScaler, StandardScaler
 from sklearn.linear_model import Ridge, Lasso
 from sklearn.neighbors import KNeighborsRegressor
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.grid_search import GridSearchCV
-from sklearn.cross_validation import KFold, ShuffleSplit
+from sklearn.cross_validation import ShuffleSplit
+from sklearn.decomposition import TruncatedSVD
 import copy
 
 
@@ -30,75 +32,15 @@ class ModelTrainer():
                                   param_grid={'alpha': np.logspace(-3, 3, 7)}
                                   ),
                              knn=
-                             dict(model=KNeighborsRegressor(n_jobs=1),
-                                  param_grid={'n_neighbors': range(1, 10, 2)}
+                             dict(model=KNeighborsRegressor(n_jobs=1,
+                                                            weights='uniform'),
+                                  param_grid={'n_neighbors': [5]}
                                   ),
                              rff=
                              dict(model=RandomForestRegressor(n_jobs=1),
-                                  param_grid={'max_depth': [10]}
+                                  param_grid={'max_depth': [None]}
                                   ),
                              )
-
-
-  def train_model(self, model_choice):
-
-    if 1:
-      model_pipe = Pipeline([
-        ('features', FeatureUnion(
-          list((c, h.ColumnHasherTransformer(c)) for c in self.categorical)
-        )),
-        ('model', model_choice['model']),
-      ])
-      print self.chunk[self.categorical].info()
-    elif 0:
-      numeric = copy.deepcopy(self.numeric)
-      numeric.remove('X1')
-
-      model_pipe = Pipeline([
-        ('features', FeatureUnion(
-          [('numeric', h.ColumnSelectorTransformer(numeric)),]
-        )),
-        ('model', model_choice['model']),
-      ])
-      print self.chunk[self.numeric].info()
-    else:
-      numeric = copy.deepcopy(self.numeric)
-      numeric.remove('X1')
-
-      model_pipe = Pipeline([
-        ('features', FeatureUnion(
-          [('numeric', h.ColumnSelectorTransformer(numeric)),] +
-          list((c, h.ColumnHasherTransformer(c)) for c in self.categorical)
-        )),
-        ('model', model_choice['model']),
-      ])
-      print self.chunk[numeric+self.categorical].info()
-
-    y = self.chunk.loc[:,'X1'].astype(np.float64)
-
-    cv = ShuffleSplit(len(y), n_iter=5, test_size=0.3)
-    rgr_CV = GridSearchCV(model_pipe,
-                          param_grid={'model__'+k:v
-                                      for k,v in
-                                      model_choice['param_grid'].iteritems()},
-                          cv=cv,
-                          n_jobs=1)
-    rgr_CV.fit(self.chunk, y)
-
-    return (rgr_CV.best_score_, rgr_CV.best_params_)
-
-
-  def train_all_models(self):
-    with h.stopwatch('retrieving DataFrame'):
-      # self.chunk = create_data_frame(self.fpath, self.numeric, self.categorical)
-      self.chunk = pd.read_hdf(self.fpath.replace(".csv",".h5"))
-
-    for modelName, modelValues in self.modelChoices.iteritems():
-      if modelName not in ['ridge', 'rff']:
-        continue
-      with h.stopwatch('training model %s' % modelName):
-        score, params = self.train_model(modelValues)
-      print modelName, score, params
 
   def create_data_frame(self):
     converters = dict(X1=h.pct_convert,
@@ -154,13 +96,113 @@ class ModelTrainer():
 
   def create_hdf5_store(self):
     with h.stopwatch('creating data frame'):
-      df = self.create_data_frame(self.fpath)
+      df = self.create_data_frame()
 
     h.full_head(df)
 
     with h.stopwatch('creating HDF5 store'):
       with pd.HDFStore(self.fpath.replace(".csv",".h5"),'w') as store:
         store.append('df', df)
+
+
+  def train_model(self, model_choice):
+
+    if 0:
+      model_pipe = Pipeline([
+        ('features', FeatureUnion(
+          list((c, h.ColumnHasherTransformer(c)) for c in self.categorical)
+        )),
+        ('model', model_choice['model']),
+      ])
+      print self.chunk[self.categorical].info()
+    elif 0:
+      numeric = copy.deepcopy(self.numeric)
+      numeric.remove('X1')
+
+      model_pipe = Pipeline([
+        ('features', FeatureUnion(
+          [('numeric', h.ColumnSelectorTransformer(numeric)),]
+        )),
+        ('model', model_choice['model']),
+      ])
+      print self.chunk[self.numeric].info()
+    elif 1:
+      numeric = copy.deepcopy(self.numeric)
+      numeric.remove('X1')
+
+      model_pipe = Pipeline([
+        ('features', FeatureUnion(
+          [('numeric', h.ColumnSelectorTransformer(numeric)),] +
+          list((c, h.ColumnHasherTransformer(c)) for c in self.categorical)
+        )),
+        ('scaler', MaxAbsScaler()),
+        ('model', model_choice['model']),
+      ])
+      print self.chunk[numeric+self.categorical].info()
+    elif 0:
+      numeric = copy.deepcopy(self.numeric)
+      numeric.remove('X1')
+
+      cat_pipe = Pipeline([
+        ('features', FeatureUnion(
+          list((c, h.ColumnHasherTransformer(c)) for c in self.categorical)
+        )),
+        ('svd', TruncatedSVD(n_components=100)),
+        ('model', model_choice['model']),
+      ])
+
+      model_pipe = Pipeline([
+        ('features', FeatureUnion([
+          ('numeric', h.ColumnSelectorTransformer(numeric)),
+          ('cats', cat_pipe),
+        ])
+         ),
+        ('model', model_choice['model']),
+      ])
+    else:
+      numeric = copy.deepcopy(self.numeric)
+      numeric.remove('X1')
+
+      model_pipe = Pipeline([
+        ('features', FeatureUnion(
+          [('numeric', h.ColumnSelectorTransformer(numeric)), ] +
+          list((c, h.ColumnHasherTransformer(c)) for c in self.categorical)
+          )
+        ),
+        ('svd', TruncatedSVD(n_components=100)),
+        ('model', model_choice['model']),
+      ])
+      print self.chunk[numeric + self.categorical].info()
+
+    y = self.chunk.loc[:, 'X1'].astype(np.float64)
+
+    cv = ShuffleSplit(len(y), n_iter=5, test_size=0.3)
+    rgr_CV = GridSearchCV(model_pipe,
+                          param_grid={'model__'+k:v
+                                      for k,v in
+                                      model_choice['param_grid'].iteritems()},
+                          cv=cv,
+                          n_jobs=1)
+    rgr_CV.fit(self.chunk, y)
+
+    print rgr_CV
+    return (rgr_CV.best_score_, rgr_CV.best_params_)
+
+
+  def train_all_models(self, overwrite=False):
+    with h.stopwatch('retrieving DataFrame'):
+      if overwrite:
+        self.chunk = self.create_hdf5_store()
+      self.chunk = pd.read_hdf(self.fpath.replace(".csv",".h5")).sample(40000)
+
+    for modelName, modelValues in self.modelChoices.iteritems():
+      if modelName not in ['rff', 'knn']:
+        continue
+      with h.stopwatch('training model %s' % modelName):
+        score, params = self.train_model(modelValues)
+      print modelName, score, params
+
+
 
 
 
@@ -171,5 +213,5 @@ if __name__ == "__main__":
     fpath = "../resources/Data for Cleaning & Modeling.csv"
 
   if 1:
-    ModelTrainer(fpath).train_all_models()
+    ModelTrainer(fpath).train_all_models(overwrite=False)
 
